@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/testutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/postgresqlreceiver/internal/metadata"
 )
 
@@ -150,6 +151,42 @@ func TestValidate(t *testing.T) {
 				errQueryPlanWithoutTopQuery,
 			},
 		},
+		{
+			desc: "table definition event without the feature gate",
+			defaultConfigModifier: func(cfg *Config) {
+				cfg.Username = "otel"
+				cfg.Password = "otel"
+				cfg.LogsBuilderConfig.Events.DbServerTableDefinition.Enabled = true
+			},
+			expected: []error{
+				errTableDefinitionWithoutFeatureGate,
+			},
+		},
+		{
+			desc: "table definition event with non-positive schema_collection settings",
+			defaultConfigModifier: func(cfg *Config) {
+				cfg.Username = "otel"
+				cfg.Password = "otel"
+				cfg.LogsBuilderConfig.Events.DbServerTableDefinition.Enabled = true
+				cfg.SchemaCollection.CollectionInterval = 0
+				cfg.SchemaCollection.MaxTables = 0
+				cfg.SchemaCollection.MaxColumns = -1
+			},
+			expected: []error{
+				errSchemaCollectionInterval,
+				errSchemaCollectionMaxTables,
+				errSchemaCollectionMaxColumns,
+			},
+		},
+		{
+			desc: "schema_collection settings are ignored when the table definition event is disabled",
+			defaultConfigModifier: func(cfg *Config) {
+				cfg.Username = "otel"
+				cfg.Password = "otel"
+				cfg.SchemaCollection.MaxTables = 0
+			},
+			expected: nil,
+		},
 	}
 	for _, tC := range testCases {
 		t.Run(tC.desc, func(t *testing.T) {
@@ -186,6 +223,8 @@ func TestLoadConfig(t *testing.T) {
 		expected.Password = "${env:POSTGRESQL_PASSWORD}"
 		expected.TopQueryCollection.TopNQuery = 1234
 		expected.TopQueryCollection.QueryPlanCacheTTL = time.Second * 123
+		expected.SchemaCollection.CollectionInterval = time.Hour
+		expected.SchemaCollection.MaxTables = 1000
 		require.Equal(t, expected, cfg)
 	})
 
@@ -267,4 +306,14 @@ func TestTimeoutConfig(t *testing.T) {
 			require.Equal(t, tc.want, cfg.ControllerConfig.Timeout)
 		})
 	}
+}
+
+func TestValidateTableDefinitionWithFeatureGate(t *testing.T) {
+	defer testutil.SetFeatureGateForTest(t, metadata.ReceiverPostgresqlSchemaCollectionFeatureGate, true)()
+
+	cfg := NewFactory().CreateDefaultConfig().(*Config)
+	cfg.Username = "otel"
+	cfg.Password = "otel"
+	cfg.LogsBuilderConfig.Events.DbServerTableDefinition.Enabled = true
+	require.NoError(t, confmap.Validate(cfg))
 }

@@ -715,6 +715,35 @@ query sample
 | postgresql.blocking.lock.relation | The name of the relation (table) being waited on. Empty string when not blocked or when lock is not on a relation. | Any Str | - |
 | postgresql.blocking.transaction.start_time | UTC timestamp (RFC3339) when the current transaction started. Empty string when no active transaction. | Any Str | - |
 
+### db.server.table_definition
+
+The definition of a table read from the system catalog: its database, schema, columns, indexes and foreign keys. One event is reported per table on each schema collection.
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| db.system.name | The database management system (DBMS) product as identified by the client instrumentation. | Str: ``postgresql`` | - |
+| db.namespace | The database namespace, following the `{database}|{schema}` format defined by OpenTelemetry semantic conventions for PostgreSQL. | Any Str | - |
+| db.collection.name | The name of the table within the database. | Any Str | - |
+| postgresql.database.name | The name of the database. | Any Str | - |
+| postgresql.database.id | The object identifier (OID) of the database. | Any Str | - |
+| postgresql.database.owner.name | The name of the role that owns the database. | Any Str | - |
+| postgresql.database.encoding | The character set encoding of the database (e.g. UTF8). | Any Str | - |
+| postgresql.database.description | The comment on the database, or an empty string if it has none. | Any Str | - |
+| postgresql.schema.name | The name of the schema. | Any Str | - |
+| postgresql.schema.id | The object identifier (OID) of the schema. | Any Str | - |
+| postgresql.schema.owner.name | The name of the role that owns the schema. | Any Str | - |
+| postgresql.table.id | The object identifier (OID) of the table. | Any Str | - |
+| postgresql.table.owner.name | The name of the role that owns the table. | Any Str | - |
+| postgresql.table.relkind | The kind of table, as `pg_class.relkind`: `r` for an ordinary table, `p` for a partitioned table, `f` for a foreign table. | Any Str | - |
+| postgresql.table.partition_key | The partition key definition of a partitioned table, or an empty string otherwise. | Any Str | - |
+| postgresql.table.partition_count | The number of partitions (or inheritance children) of the table. 0 when it has none. | Any Int | - |
+| postgresql.table.columns | The columns of the table in definition order, as a JSON array of objects with `name`, `data_type`, `nullable` and `default` (null when the column has no default). Limited by `schema_collection.max_columns`. | Any Str | - |
+| postgresql.table.indexes | The indexes of the table, as a JSON array of objects with `name`, `definition` and the `pg_index` flags `is_unique`, `is_exclusion`, `is_immediate`, `is_clustered`, `is_valid`, `is_checkxmin`, `is_ready`, `is_live`, `is_replident` and `is_partial`. | Any Str | - |
+| postgresql.table.foreign_keys | The foreign key constraints of the table, as a JSON array of objects with `name` and `definition`. | Any Str | - |
+| postgresql.schema_collection.table_count | The number of db.server.table_definition events reported by this collection, across all databases. | Any Int | - |
+
 ### db.server.top_query
 
 top query
@@ -764,6 +793,7 @@ This component has the following feature gates:
 | ------------ | ----- | ----------- | ------------ | ---------- | --------- |
 | `postgresqlreceiver.preciselagmetrics` | beta | Metric `postgresql.wal.lag` is replaced by more precise `postgresql.wal.delay`. | v0.89.0 | N/A | [Link](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/30831) |
 | `receiver.postgresql.connectionPool` | beta | Use of connection pooling | v0.96.0 | N/A | [Link](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/30831) |
+| `receiver.postgresql.schemaCollection` | alpha | Allows enabling the db.server.table_definition event. | v0.166.0 | N/A | [Link](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/0) |
 | `receiver.postgresql.separateSchemaAttr` | alpha | Moves Schema Names into dedicated Attribute | v0.122.0 | N/A | [Link](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29559) |
 | `receiver.postgresql.useOTelSemconv` | alpha | When enabled, uses a single resource per server with a service.instance.id (UUID v5) resource attribute, aligning with OpenTelemetry semantic conventions. When disabled, uses the legacy per-entity resource model with postgresql.database.name, postgresql.table.name, postgresql.index.name, and postgresql.schema.name resource attributes. | v0.156.0 | N/A | [Link](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/45347) |
 

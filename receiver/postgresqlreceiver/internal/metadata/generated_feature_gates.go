@@ -22,6 +22,14 @@ var ReceiverPostgresqlConnectionPoolFeatureGate = featuregate.GlobalRegistry().M
 	featuregate.WithRegisterFromVersion("v0.96.0"),
 )
 
+var ReceiverPostgresqlSchemaCollectionFeatureGate = featuregate.GlobalRegistry().MustRegister(
+	"receiver.postgresql.schemaCollection",
+	featuregate.StageAlpha,
+	featuregate.WithRegisterDescription("Allows enabling the db.server.table_definition event."),
+	featuregate.WithRegisterReferenceURL("https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/0"),
+	featuregate.WithRegisterFromVersion("v0.166.0"),
+)
+
 var ReceiverPostgresqlSeparateSchemaAttrFeatureGate = featuregate.GlobalRegistry().MustRegister(
 	"receiver.postgresql.separateSchemaAttr",
 	featuregate.StageAlpha,

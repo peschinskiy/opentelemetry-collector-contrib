@@ -22,6 +22,22 @@ $defs:
       max_rows_per_query:
         type: integer
         x-customType: int64
+  schema_collection:
+    description: SchemaCollection configures the db.server.table_definition event.
+    type: object
+    properties:
+      collection_interval:
+        description: CollectionInterval is how often the table definitions are reported.
+        type: string
+        format: duration
+      max_columns:
+        description: MaxColumns is the maximum number of columns reported per table.
+        type: integer
+        x-customType: int64
+      max_tables:
+        description: MaxTables is the maximum number of tables reported per database.
+        type: integer
+        x-customType: int64
   top_query_collection:
     type: object
     properties:
@@ -64,6 +80,8 @@ properties:
     $ref: go.opentelemetry.io/collector/config/configopaque.string
   query_sample_collection:
     $ref: query_sample_collection
+  schema_collection:
+    $ref: schema_collection
   tls:
     $ref: go.opentelemetry.io/collector/config/configtls.client_config
   top_query_collection:

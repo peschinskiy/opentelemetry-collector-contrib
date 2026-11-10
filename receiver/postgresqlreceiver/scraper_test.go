@@ -2354,6 +2354,16 @@ func (*mockClient) getTopQuery(context.Context, int64, []string, *zap.Logger) ([
 	panic("unimplemented")
 }
 
+// getDatabaseDefinitions implements client.
+func (*mockClient) getDatabaseDefinitions(context.Context, []string, []string) ([]databaseDefinition, error) {
+	panic("unimplemented")
+}
+
+// getTableDefinitions implements client.
+func (*mockClient) getTableDefinitions(context.Context, int64, int64) ([]tableDefinition, error) {
+	panic("unimplemented")
+}
+
 // close implements postgreSQLClientFactory.
 func (mockSimpleClientFactory) close() error {
 	return nil
@@ -3589,4 +3599,125 @@ func TestServerEndpointUnresolvedOmitsAttributes(t *testing.T) {
 
 	_, ok = res.Attributes().Get("server.port")
 	assert.False(t, ok)
+}
+
+var databaseDefinitionColumns = []string{"oid", "datname", "encoding", "rolname", "description"}
+
+func newTableDefinitionScraper(t *testing.T, cfg *Config) (*postgreSQLScraper, sqlmock.Sqlmock, *recordingClientFactory) {
+	t.Helper()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	factory := &recordingClientFactory{mockSimpleClientFactory: mockSimpleClientFactory{db: db}}
+	scraper, err := newPostgreSQLScraper(receivertest.NewNopSettings(metadata.Type), cfg, factory, newCache(1), newTTLCache[string](1, time.Second))
+	require.NoError(t, err)
+	return scraper, mock, factory
+}
+
+func tableDefinitionConfig() *Config {
+	cfg := createDefaultConfig().(*Config)
+	cfg.Databases = []string{}
+	cfg.LogsBuilderConfig.Events.DbServerTableDefinition.Enabled = true
+	return cfg
+}
+
+func TestScrapeTableDefinitions(t *testing.T) {
+	cfg := tableDefinitionConfig()
+	cfg.ExcludeDatabases = []string{"rdsadmin"}
+	cfg.SchemaCollection.MaxTables = 7
+	cfg.SchemaCollection.MaxColumns = 3
+	scraper, mock, factory := newTableDefinitionScraper(t, cfg)
+
+	mock.ExpectQuery(`AND db\.datname NOT IN \('rdsadmin'\)\s+ORDER BY db\.datname;`).
+		WillReturnRows(sqlmock.NewRows(databaseDefinitionColumns).
+			AddRow("16384", "app", "UTF8", "app_owner", "Application data").
+			AddRow("16388", "empty", "UTF8", "app_owner", "").
+			AddRow("16390", "broken", "UTF8", "app_owner", ""))
+	mock.ExpectQuery(`LIMIT 3\s+\) a.*LIMIT 7;`).
+		WillReturnRows(sqlmock.NewRows(tableDefinitionColumns).
+			AddRow("2200", "public", "app_owner", "16385", "accounts", "app_owner", "r",
+				"pg_toast_16385", "", int64(0),
+				[]byte(`[{"name":"id","data_type":"integer","nullable":false,"default":"nextval('accounts_id_seq'::regclass)"},{"name":"email","data_type":"text","nullable":true,"default":null}]`),
+				[]byte(`[{"name":"accounts_pkey","definition":"CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)","is_unique":true,"is_exclusion":false,"is_immediate":true,"is_clustered":false,"is_valid":true,"is_checkxmin":false,"is_ready":true,"is_live":true,"is_replident":false,"is_partial":false}]`),
+				[]byte(`[]`)).
+			AddRow("16400", "sales", "sales_owner", "16401", "orders", "sales_owner", "p",
+				"", "RANGE (created_at)", int64(12),
+				[]byte(`[{"name":"account_id","data_type":"integer","nullable":false,"default":null}]`),
+				[]byte(`[]`),
+				[]byte(`[{"name":"orders_account_id_fkey","definition":"FOREIGN KEY (account_id) REFERENCES public.accounts(id)"}]`)))
+	mock.ExpectQuery(`LIMIT 7;`).WillReturnRows(sqlmock.NewRows(tableDefinitionColumns))
+	mock.ExpectQuery(`LIMIT 7;`).WillReturnError(errors.New("permission denied for database broken"))
+
+	actualLogs, err := scraper.scrapeTableDefinitions(t.Context())
+	// The broken database is reported as a partial failure; app is still reported.
+	require.Error(t, err)
+	assert.True(t, scrapererror.IsPartialScrapeError(err))
+	require.ErrorContains(t, err, `database "broken"`)
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	// Each database's catalog is read through a connection to that database.
+	assert.Equal(t, []string{defaultPostgreSQLDatabase, "app", "empty", "broken"}, factory.requestedDatabases)
+
+	// Only app has tables: empty reports nothing without an error, and broken reports nothing.
+	assert.Equal(t, 2, actualLogs.LogRecordCount())
+
+	expectedFile := filepath.Join("testdata", "scraper", "table-definition", "expected.yaml")
+	// golden.WriteLogs(t, expectedFile, actualLogs)
+	expectedLogs, err := golden.ReadLogs(expectedFile)
+	require.NoError(t, err)
+	assert.NoError(t, plogtest.CompareLogs(expectedLogs, actualLogs,
+		plogtest.IgnoreResourceAttributeValue("service.instance.id"),
+		plogtest.IgnoreResourceAttributeValue("server.address"),
+		plogtest.IgnoreTimestamp()))
+}
+
+func TestScrapeTableDefinitionsHonorsCollectionInterval(t *testing.T) {
+	cfg := tableDefinitionConfig()
+	cfg.SchemaCollection.CollectionInterval = time.Hour
+	scraper, mock, _ := newTableDefinitionScraper(t, cfg)
+
+	mock.ExpectQuery(`FROM pg_database`).
+		WillReturnRows(sqlmock.NewRows(databaseDefinitionColumns).AddRow("16384", "app", "UTF8", "app_owner", ""))
+	mock.ExpectQuery(`FROM pg_class c`).
+		WillReturnRows(sqlmock.NewRows(tableDefinitionColumns).
+			AddRow("2200", "public", "app_owner", "16385", "accounts", "app_owner", "r", "", "", int64(0), []byte(`[]`), []byte(`[]`), []byte(`[]`)))
+
+	logs, err := scraper.scrapeTableDefinitions(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, logs.LogRecordCount())
+
+	// The next scrape is within the interval: no queries, no records.
+	logs, err = scraper.scrapeTableDefinitions(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 0, logs.LogRecordCount())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestScrapeTableDefinitionsHonorsDatabasesAndConnectDatabase(t *testing.T) {
+	cfg := tableDefinitionConfig()
+	cfg.Databases = []string{"app"}
+	cfg.ConnectDatabase = "monitoring"
+	scraper, mock, factory := newTableDefinitionScraper(t, cfg)
+
+	mock.ExpectQuery(`AND db\.datname IN \('app'\)\s+ORDER BY`).
+		WillReturnRows(sqlmock.NewRows(databaseDefinitionColumns))
+
+	logs, err := scraper.scrapeTableDefinitions(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 0, logs.LogRecordCount())
+	require.NoError(t, mock.ExpectationsWereMet())
+	assert.Equal(t, []string{"monitoring"}, factory.requestedDatabases)
+}
+
+func TestScrapeTableDefinitionsDatabaseListFailure(t *testing.T) {
+	scraper, mock, _ := newTableDefinitionScraper(t, tableDefinitionConfig())
+
+	mock.ExpectQuery(`FROM pg_database`).WillReturnError(errors.New("connection reset"))
+
+	logs, err := scraper.scrapeTableDefinitions(t.Context())
+	require.ErrorContains(t, err, "connection reset")
+	assert.False(t, scrapererror.IsPartialScrapeError(err))
+	assert.Equal(t, 0, logs.LogRecordCount())
+	require.NoError(t, mock.ExpectationsWereMet())
 }

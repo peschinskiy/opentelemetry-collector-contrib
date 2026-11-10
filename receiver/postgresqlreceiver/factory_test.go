@@ -53,6 +53,23 @@ func TestCreateMetrics(t *testing.T) {
 	require.NotNil(t, metricsReceiver)
 }
 
+func TestCreateLogsWithTableDefinitionEvent(t *testing.T) {
+	factory := NewFactory()
+	cfg := factory.CreateDefaultConfig().(*Config)
+	cfg.Username = "otel"
+	cfg.Password = "otel"
+	cfg.LogsBuilderConfig.Events.DbServerTableDefinition.Enabled = true
+
+	logsReceiver, err := factory.CreateLogs(
+		t.Context(),
+		receivertest.NewNopSettings(metadata.Type),
+		cfg,
+		consumertest.NewNop(),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, logsReceiver)
+}
+
 func TestCreateMetricsResolvesDBAuthAtStart(t *testing.T) {
 	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig().(*Config)
@@ -105,6 +122,10 @@ func TestCreateDefaultConfig(t *testing.T) {
 	assert.Equal(t, time.Hour, defaultCfg.TopQueryCollection.QueryPlanCacheTTL)
 
 	assert.Equal(t, int64(1000), defaultCfg.QuerySampleCollection.MaxRowsPerQuery)
+
+	assert.Equal(t, 10*time.Minute, defaultCfg.SchemaCollection.CollectionInterval)
+	assert.Equal(t, int64(300), defaultCfg.SchemaCollection.MaxTables)
+	assert.Equal(t, int64(50), defaultCfg.SchemaCollection.MaxColumns)
 
 	assert.Equal(t, "postgres", defaultCfg.ConnectDatabase)
 }

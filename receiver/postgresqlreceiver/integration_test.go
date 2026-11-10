@@ -8,6 +8,7 @@ package postgresqlreceiver
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -1205,4 +1206,180 @@ WHERE c.relname IN ('big_index_table', 'toasted_table') AND n.nspname = 'public'
 		assert.Greater(t, toastStats.size, toastRef.relationSize+toastRef.indexesSize,
 			"reported size must include TOAST data, not just the main heap and indexes")
 	}
+}
+
+func TestTableDefinitionsFromContainer(t *testing.T) {
+	t.Run("pre17", tableDefinitionsFromContainerTest(pre17TestVersion))
+	t.Run("post17", tableDefinitionsFromContainerTest(post17TestVersion))
+}
+
+func tableDefinitionsFromContainerTest(pgVersion string) func(*testing.T) {
+	return func(t *testing.T) {
+		ci, err := testcontainers.GenericContainer(
+			t.Context(),
+			testcontainers.GenericContainerRequest{
+				ContainerRequest: testcontainers.ContainerRequest{
+					Image: fmt.Sprintf("postgres:%s", pgVersion),
+					Env: map[string]string{
+						"POSTGRES_USER":     "root",
+						"POSTGRES_PASSWORD": "otel",
+						"POSTGRES_DB":       "otel",
+					},
+					Files: []testcontainers.ContainerFile{{
+						HostFilePath:      filepath.Join("testdata", "integration", "03-table-definition-init.sql"),
+						ContainerFilePath: "/docker-entrypoint-initdb.d/01-init.sql",
+						FileMode:          700,
+					}},
+					ExposedPorts: []string{postgresqlPort},
+					// See tableSizeIncludesIndexesAndToastTest: the second readiness line is the real server.
+					WaitingFor: wait.ForLog("database system is ready to accept connections").
+						WithOccurrence(2).
+						WithStartupTimeout(2 * time.Minute),
+				},
+			},
+		)
+		require.NoError(t, err)
+		defer testcontainers.CleanupContainer(t, ci)
+		require.NoError(t, ci.Start(t.Context()))
+
+		p, err := ci.MappedPort(t.Context(), postgresqlPort)
+		require.NoError(t, err)
+
+		cfg := createDefaultConfig().(*Config)
+		cfg.Username = "otelu"
+		cfg.Password = "otelp"
+		cfg.AddrConfig.Endpoint = net.JoinHostPort("localhost", p.Port())
+		cfg.ClientConfig = configtls.ClientConfig{Insecure: true}
+		cfg.LogsBuilderConfig.Events.DbServerTableDefinition.Enabled = true
+
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+
+		clientFactory := newDefaultClientFactory(cfg)
+		connectClient, err := clientFactory.getClient(ctx, "postgres")
+		require.NoError(t, err)
+		defer connectClient.Close()
+
+		t.Run("databases", func(t *testing.T) {
+			databases, listErr := connectClient.getDatabaseDefinitions(ctx, nil, nil)
+			require.NoError(t, listErr)
+			byName := map[string]databaseDefinition{}
+			for _, d := range databases {
+				byName[d.name] = d
+			}
+			require.Contains(t, byName, "otel")
+			require.Contains(t, byName, "postgres")
+			require.NotContains(t, byName, "template0")
+			require.NotContains(t, byName, "template1")
+			otel := byName["otel"]
+			assert.NotEmpty(t, otel.id)
+			assert.Equal(t, "root", otel.owner)
+			assert.Equal(t, "UTF8", otel.encoding)
+			assert.Equal(t, "Integration fixture", otel.description)
+
+			databases, listErr = connectClient.getDatabaseDefinitions(ctx, nil, []string{"postgres"})
+			require.NoError(t, listErr)
+			require.Len(t, databases, 1)
+			assert.Equal(t, "otel", databases[0].name)
+
+			databases, listErr = connectClient.getDatabaseDefinitions(ctx, []string{"postgres"}, nil)
+			require.NoError(t, listErr)
+			require.Len(t, databases, 1)
+			assert.Equal(t, "postgres", databases[0].name)
+		})
+
+		otelClient, err := clientFactory.getClient(ctx, "otel")
+		require.NoError(t, err)
+		defer otelClient.Close()
+
+		t.Run("tables", func(t *testing.T) {
+			tables, tablesErr := otelClient.getTableDefinitions(ctx, 100, 2)
+			require.NoError(t, tablesErr)
+			// Partitions are reported through their parent; views are not tables.
+			require.Len(t, tables, 2)
+
+			accounts := tables[0]
+			assert.Equal(t, "public", accounts.schemaName)
+			assert.Equal(t, "accounts", accounts.name)
+			assert.Equal(t, "root", accounts.owner)
+			assert.Equal(t, "r", accounts.relkind)
+			assert.NotEmpty(t, accounts.id)
+			assert.NotEmpty(t, accounts.schemaID)
+			assert.NotEmpty(t, accounts.toastTable, "a text column gives the table a TOAST table")
+			assert.Empty(t, accounts.partitionKey)
+			assert.Equal(t, int64(0), accounts.partitionCount)
+			// max_columns keeps the first columns in definition order.
+			require.JSONEq(t, `[
+				{"name": "id", "data_type": "integer", "nullable": false, "default": "nextval('accounts_id_seq'::regclass)"},
+				{"name": "email", "data_type": "text", "nullable": true, "default": null}
+			]`, accounts.columns)
+			indexes := decodeJSONObjects(t, accounts.indexes)
+			require.Len(t, indexes, 2)
+			emailIdx := indexes[0]
+			assert.Equal(t, "accounts_email_idx", emailIdx["name"])
+			assert.Equal(t, true, emailIdx["is_partial"])
+			assert.Equal(t, true, emailIdx["is_valid"])
+			pkey := indexes[1]
+			assert.Equal(t, "accounts_pkey", pkey["name"])
+			assert.Equal(t, true, pkey["is_unique"])
+			assert.Contains(t, pkey["definition"], "CREATE UNIQUE INDEX accounts_pkey ON public.accounts")
+			assert.Equal(t, "[]", accounts.foreignKeys)
+
+			orders := tables[1]
+			assert.Equal(t, "sales", orders.schemaName)
+			assert.Equal(t, "app_owner", orders.schemaOwner)
+			assert.Equal(t, "orders", orders.name)
+			assert.Equal(t, "app_owner", orders.owner)
+			assert.Equal(t, "p", orders.relkind)
+			assert.Equal(t, "RANGE (created_at)", orders.partitionKey)
+			assert.Equal(t, int64(2), orders.partitionCount)
+			foreignKeys := decodeJSONObjects(t, orders.foreignKeys)
+			require.Len(t, foreignKeys, 1)
+			fk := foreignKeys[0]
+			assert.Equal(t, "orders_account_id_fkey", fk["name"])
+			assert.Contains(t, fk["definition"], "FOREIGN KEY (account_id) REFERENCES")
+
+			tables, tablesErr = otelClient.getTableDefinitions(ctx, 1, 50)
+			require.NoError(t, tablesErr)
+			require.Len(t, tables, 1)
+			assert.Equal(t, "accounts", tables[0].name)
+			assert.Len(t, decodeJSONObjects(t, tables[0].columns), 3)
+		})
+
+		t.Run("events", func(t *testing.T) {
+			cfg.Databases = []string{"otel"}
+			ns, scrapeErr := newPostgreSQLScraper(receiver.Settings{
+				TelemetrySettings: component.TelemetrySettings{Logger: zap.NewNop()},
+			}, cfg, clientFactory, newCache(1), newTTLCache[string](1, time.Second))
+			require.NoError(t, scrapeErr)
+
+			logs, scrapeErr := ns.scrapeTableDefinitions(ctx)
+			require.NoError(t, scrapeErr)
+			require.Equal(t, 2, logs.LogRecordCount())
+
+			var attributes map[string]any
+			for _, record := range logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().All() {
+				if record.EventName() == "db.server.table_definition" {
+					if name, _ := record.Attributes().Get("db.collection.name"); name.Str() == "orders" {
+						attributes = record.Attributes().AsRaw()
+					}
+				}
+			}
+			require.NotNil(t, attributes, "no db.server.table_definition record for sales.orders")
+			assert.Equal(t, "otel|sales", attributes["db.namespace"])
+			assert.Equal(t, "orders", attributes["db.collection.name"])
+			assert.Equal(t, "otel", attributes["postgresql.database.name"])
+			assert.Equal(t, "sales", attributes["postgresql.schema.name"])
+			assert.Equal(t, int64(2), attributes["postgresql.table.partition_count"])
+			assert.Len(t, decodeJSONObjects(t, attributes["postgresql.table.columns"].(string)), 3)
+		})
+	}
+}
+
+// decodeJSONObjects decodes one of the JSON array attributes of db.server.table_definition.
+func decodeJSONObjects(t *testing.T, data string) []map[string]any {
+	t.Helper()
+	var objects []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(data), &objects))
+	return objects
 }

@@ -1,0 +1,145 @@
+resourceLogs:
+  - resource:
+      attributes:
+        - key: service.instance.id
+          value:
+            stringValue: localhost:5432
+        - key: server.address
+          value:
+            stringValue: localhost
+        - key: server.port
+          value:
+            intValue: "5432"
+    scopeLogs:
+      - logRecords:
+          - attributes:
+              - key: db.system.name
+                value:
+                  stringValue: postgresql
+              - key: db.namespace
+                value:
+                  stringValue: app|public
+              - key: db.collection.name
+                value:
+                  stringValue: accounts
+              - key: postgresql.database.name
+                value:
+                  stringValue: app
+              - key: postgresql.database.id
+                value:
+                  stringValue: "16384"
+              - key: postgresql.database.owner.name
+                value:
+                  stringValue: app_owner
+              - key: postgresql.database.encoding
+                value:
+                  stringValue: UTF8
+              - key: postgresql.database.description
+                value:
+                  stringValue: Application data
+              - key: postgresql.schema.name
+                value:
+                  stringValue: public
+              - key: postgresql.schema.id
+                value:
+                  stringValue: "2200"
+              - key: postgresql.schema.owner.name
+                value:
+                  stringValue: app_owner
+              - key: postgresql.table.id
+                value:
+                  stringValue: "16385"
+              - key: postgresql.table.owner.name
+                value:
+                  stringValue: app_owner
+              - key: postgresql.table.relkind
+                value:
+                  stringValue: r
+              - key: postgresql.table.toast_table
+                value:
+                  stringValue: pg_toast_16385
+              - key: postgresql.table.partition_key
+                value:
+                  stringValue: ""
+              - key: postgresql.table.partition_count
+                value:
+                  intValue: "0"
+              - key: postgresql.table.columns
+                value:
+                  stringValue: '[{"name":"id","data_type":"integer","nullable":false,"default":"nextval(''accounts_id_seq''::regclass)"},{"name":"email","data_type":"text","nullable":true,"default":null}]'
+              - key: postgresql.table.indexes
+                value:
+                  stringValue: '[{"name":"accounts_pkey","definition":"CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)","is_unique":true,"is_exclusion":false,"is_immediate":true,"is_clustered":false,"is_valid":true,"is_checkxmin":false,"is_ready":true,"is_live":true,"is_replident":false,"is_partial":false}]'
+              - key: postgresql.table.foreign_keys
+                value:
+                  stringValue: '[]'
+            body: {}
+            eventName: db.server.table_definition
+            timeUnixNano: "1794317983686341000"
+          - attributes:
+              - key: db.system.name
+                value:
+                  stringValue: postgresql
+              - key: db.namespace
+                value:
+                  stringValue: app|sales
+              - key: db.collection.name
+                value:
+                  stringValue: orders
+              - key: postgresql.database.name
+                value:
+                  stringValue: app
+              - key: postgresql.database.id
+                value:
+                  stringValue: "16384"
+              - key: postgresql.database.owner.name
+                value:
+                  stringValue: app_owner
+              - key: postgresql.database.encoding
+                value:
+                  stringValue: UTF8
+              - key: postgresql.database.description
+                value:
+                  stringValue: Application data
+              - key: postgresql.schema.name
+                value:
+                  stringValue: sales
+              - key: postgresql.schema.id
+                value:
+                  stringValue: "16400"
+              - key: postgresql.schema.owner.name
+                value:
+                  stringValue: sales_owner
+              - key: postgresql.table.id
+                value:
+                  stringValue: "16401"
+              - key: postgresql.table.owner.name
+                value:
+                  stringValue: sales_owner
+              - key: postgresql.table.relkind
+                value:
+                  stringValue: p
+              - key: postgresql.table.toast_table
+                value:
+                  stringValue: ""
+              - key: postgresql.table.partition_key
+                value:
+                  stringValue: RANGE (created_at)
+              - key: postgresql.table.partition_count
+                value:
+                  intValue: "12"
+              - key: postgresql.table.columns
+                value:
+                  stringValue: '[{"name":"account_id","data_type":"integer","nullable":false,"default":null}]'
+              - key: postgresql.table.indexes
+                value:
+                  stringValue: '[]'
+              - key: postgresql.table.foreign_keys
+                value:
+                  stringValue: '[{"name":"orders_account_id_fkey","definition":"FOREIGN KEY (account_id) REFERENCES public.accounts(id)"}]'
+            body: {}
+            eventName: db.server.table_definition
+            timeUnixNano: "1794317983686341000"
+        scope:
+          name: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/postgresqlreceiver
+          version: latest

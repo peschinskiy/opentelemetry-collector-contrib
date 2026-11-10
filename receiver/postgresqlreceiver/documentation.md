@@ -715,6 +715,35 @@ query sample
 | postgresql.blocking.lock.relation | The name of the relation (table) being waited on. Empty string when not blocked or when lock is not on a relation. | Any Str | - |
 | postgresql.blocking.transaction.start_time | UTC timestamp (RFC3339) when the current transaction started. Empty string when no active transaction. | Any Str | - |
 
+### db.server.table_definition
+
+The definition of a table read from the system catalog: its database, schema, columns, indexes and foreign keys. One event is reported per table on each schema collection.
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| db.system.name | The database management system (DBMS) product as identified by the client instrumentation. | Str: ``postgresql`` | - |
+| db.namespace | The database namespace, following the `{database}|{schema}` format defined by OpenTelemetry semantic conventions for PostgreSQL. | Any Str | - |
+| db.collection.name | The name of the table within the database. | Any Str | - |
+| postgresql.database.name | The name of the database. | Any Str | - |
+| postgresql.database.id | The object identifier (OID) of the database. | Any Str | - |
+| postgresql.database.owner.name | The name of the role that owns the database. | Any Str | - |
+| postgresql.database.encoding | The character set encoding of the database (e.g. UTF8). | Any Str | - |
+| postgresql.database.description | The comment on the database, or an empty string if it has none. | Any Str | - |
+| postgresql.schema.name | The name of the schema. | Any Str | - |
+| postgresql.schema.id | The object identifier (OID) of the schema. | Any Str | - |
+| postgresql.schema.owner.name | The name of the role that owns the schema. | Any Str | - |
+| postgresql.table.id | The object identifier (OID) of the table. | Any Str | - |
+| postgresql.table.owner.name | The name of the role that owns the table. | Any Str | - |
+| postgresql.table.relkind | The kind of table, as `pg_class.relkind`: `r` for an ordinary table, `p` for a partitioned table, `f` for a foreign table. | Any Str | - |
+| postgresql.table.toast_table | The name of the TOAST table of the table, or an empty string if it has none. | Any Str | - |
+| postgresql.table.partition_key | The partition key definition of a partitioned table, or an empty string otherwise. | Any Str | - |
+| postgresql.table.partition_count | The number of partitions (or inheritance children) of the table. 0 when it has none. | Any Int | - |
+| postgresql.table.columns | The columns of the table in definition order, as a JSON array of objects with `name`, `data_type`, `nullable` and `default` (null when the column has no default). Limited by `schema_collection.max_columns`. | Any Str | - |
+| postgresql.table.indexes | The indexes of the table, as a JSON array of objects with `name`, `definition` and the `pg_index` flags `is_unique`, `is_exclusion`, `is_immediate`, `is_clustered`, `is_valid`, `is_checkxmin`, `is_ready`, `is_live`, `is_replident` and `is_partial`. | Any Str | - |
+| postgresql.table.foreign_keys | The foreign key constraints of the table, as a JSON array of objects with `name` and `definition`. | Any Str | - |
+
 ### db.server.top_query
 
 top query

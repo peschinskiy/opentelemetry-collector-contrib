@@ -150,6 +150,31 @@ func TestValidate(t *testing.T) {
 				errQueryPlanWithoutTopQuery,
 			},
 		},
+		{
+			desc: "table definition event with non-positive schema_collection settings",
+			defaultConfigModifier: func(cfg *Config) {
+				cfg.Username = "otel"
+				cfg.Password = "otel"
+				cfg.LogsBuilderConfig.Events.DbServerTableDefinition.Enabled = true
+				cfg.SchemaCollection.CollectionInterval = 0
+				cfg.SchemaCollection.MaxTables = 0
+				cfg.SchemaCollection.MaxColumns = -1
+			},
+			expected: []error{
+				errSchemaCollectionInterval,
+				errSchemaCollectionMaxTables,
+				errSchemaCollectionMaxColumns,
+			},
+		},
+		{
+			desc: "schema_collection settings are ignored when the table definition event is disabled",
+			defaultConfigModifier: func(cfg *Config) {
+				cfg.Username = "otel"
+				cfg.Password = "otel"
+				cfg.SchemaCollection.MaxTables = 0
+			},
+			expected: nil,
+		},
 	}
 	for _, tC := range testCases {
 		t.Run(tC.desc, func(t *testing.T) {
@@ -186,6 +211,8 @@ func TestLoadConfig(t *testing.T) {
 		expected.Password = "${env:POSTGRESQL_PASSWORD}"
 		expected.TopQueryCollection.TopNQuery = 1234
 		expected.TopQueryCollection.QueryPlanCacheTTL = time.Second * 123
+		expected.SchemaCollection.CollectionInterval = time.Hour
+		expected.SchemaCollection.MaxTables = 1000
 		require.Equal(t, expected, cfg)
 	})
 

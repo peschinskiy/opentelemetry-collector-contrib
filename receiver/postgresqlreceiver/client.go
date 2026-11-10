@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -79,6 +80,8 @@ type client interface {
 	getQuerySamples(ctx context.Context, limit int64, newestQueryTimestamp float64, excludedDatabases []string, logger *zap.Logger) ([]map[string]any, float64, error)
 	getTopQuery(ctx context.Context, limit int64, excludedDatabases []string, logger *zap.Logger) ([]map[string]any, error)
 	explainQuery(ctx context.Context, query, queryID string, logger *zap.Logger) (string, error)
+	getDatabaseDefinitions(ctx context.Context, databases, excludedDatabases []string) ([]databaseDefinition, error)
+	getTableDefinitions(ctx context.Context, maxTables, maxColumns int64) ([]tableDefinition, error)
 }
 
 type postgreSQLClient struct {
@@ -1743,4 +1746,129 @@ func (c *postgreSQLClient) getTopQuery(ctx context.Context, limit int64, exclude
 	}
 
 	return finalAttributes, errors.Join(errs...)
+}
+
+// databaseDefinition is a database as described by pg_database.
+type databaseDefinition struct {
+	id          string
+	name        string
+	owner       string
+	encoding    string
+	description string
+}
+
+// tableDefinition is a table as described by the catalog of the database it belongs to.
+// columns, indexes and foreignKeys are the JSON arrays the catalog query aggregates.
+type tableDefinition struct {
+	schemaID       string
+	schemaName     string
+	schemaOwner    string
+	id             string
+	name           string
+	owner          string
+	relkind        string
+	toastTable     string
+	partitionKey   string
+	partitionCount int64
+	columns        string
+	indexes        string
+	foreignKeys    string
+}
+
+// Templates and connection-only databases are skipped: their tables can't be read.
+const databaseDefinitionQuery = `/* otel-collector-ignore */ SELECT
+  db.oid::TEXT,
+  db.datname,
+  pg_encoding_to_char(db.encoding),
+  COALESCE(r.rolname, ''),
+  COALESCE(shobj_description(db.oid, 'pg_database'), '')
+FROM pg_database db
+  LEFT JOIN pg_roles r ON r.oid = db.datdba
+WHERE NOT db.datistemplate
+  AND db.datallowconn`
+
+// getDatabaseDefinitions implements client. An empty databases list means every database.
+func (c *postgreSQLClient) getDatabaseDefinitions(ctx context.Context, databases, excludedDatabases []string) ([]databaseDefinition, error) {
+	query := databaseDefinitionQuery
+	if len(databases) > 0 {
+		query += "\n  AND db.datname IN (" + quoteDatabaseList(databases) + ")"
+	}
+	if len(excludedDatabases) > 0 {
+		query += "\n  AND db.datname NOT IN (" + quoteDatabaseList(excludedDatabases) + ")"
+	}
+	query += "\nORDER BY db.datname;"
+
+	rows, err := c.client.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query database definitions: %w", err)
+	}
+	defer rows.Close()
+
+	var definitions []databaseDefinition
+	for rows.Next() {
+		var d databaseDefinition
+		if err := rows.Scan(&d.id, &d.name, &d.encoding, &d.owner, &d.description); err != nil {
+			return nil, fmt.Errorf("failed to scan database definition: %w", err)
+		}
+		definitions = append(definitions, d)
+	}
+	return definitions, rows.Err()
+}
+
+//go:embed templates/tableDefinitionTemplate.tmpl
+var tableDefinitionTemplate string
+
+var tableDefinitionTmpl = template.Must(template.New("tableDefinition").Option("missingkey=error").Parse(tableDefinitionTemplate))
+
+// getTableDefinitions implements client. It reads the tables of the database the client is
+// connected to, since the catalog of a database is only visible from inside it.
+func (c *postgreSQLClient) getTableDefinitions(ctx context.Context, maxTables, maxColumns int64) ([]tableDefinition, error) {
+	buf := bytes.Buffer{}
+	if err := tableDefinitionTmpl.Execute(&buf, map[string]any{
+		"maxTables":  maxTables,
+		"maxColumns": maxColumns,
+	}); err != nil {
+		return nil, fmt.Errorf("failed executing template: %w", err)
+	}
+
+	rows, err := c.client.QueryContext(ctx, buf.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to query table definitions: %w", err)
+	}
+	defer rows.Close()
+
+	var definitions []tableDefinition
+	for rows.Next() {
+		var t tableDefinition
+		var columns, indexes, foreignKeys []byte
+		if err = rows.Scan(
+			&t.schemaID, &t.schemaName, &t.schemaOwner,
+			&t.id, &t.name, &t.owner, &t.relkind,
+			&t.toastTable, &t.partitionKey, &t.partitionCount,
+			&columns, &indexes, &foreignKeys,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan table definition: %w", err)
+		}
+		if t.columns, err = compactJSON(columns); err != nil {
+			return nil, fmt.Errorf("failed to decode columns of table %s.%s: %w", t.schemaName, t.name, err)
+		}
+		if t.indexes, err = compactJSON(indexes); err != nil {
+			return nil, fmt.Errorf("failed to decode indexes of table %s.%s: %w", t.schemaName, t.name, err)
+		}
+		if t.foreignKeys, err = compactJSON(foreignKeys); err != nil {
+			return nil, fmt.Errorf("failed to decode foreign keys of table %s.%s: %w", t.schemaName, t.name, err)
+		}
+		definitions = append(definitions, t)
+	}
+	return definitions, rows.Err()
+}
+
+// compactJSON strips the whitespace json_build_object puts around keys and values, which also
+// checks that the query returned valid JSON.
+func compactJSON(data []byte) (string, error) {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, data); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }

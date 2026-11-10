@@ -202,6 +202,21 @@ attributes:
       - bufferpin
       - deadlock
     requirement_level: recommended
+  postgresql.database.description:
+    description: The comment on the database, or an empty string if it has none.
+    type: string
+  postgresql.database.encoding:
+    description: The character set encoding of the database (e.g. UTF8).
+    type: string
+  postgresql.database.id:
+    description: The object identifier (OID) of the database.
+    type: string
+  postgresql.database.name:
+    description: The name of the database.
+    type: string
+  postgresql.database.owner.name:
+    description: The name of the role that owns the database.
+    type: string
   postgresql.distance.function.name:
     description: The vector distance (similarity) function used by the query, one of the pgvector distance functions.
     type: string
@@ -232,6 +247,15 @@ attributes:
   postgresql.rows:
     description: Total number of rows retrieved or affected by the statement, reported in delta value.
     type: int
+  postgresql.schema.id:
+    description: The object identifier (OID) of the schema.
+    type: string
+  postgresql.schema.name:
+    description: The name of the schema.
+    type: string
+  postgresql.schema.owner.name:
+    description: The name of the role that owns the schema.
+    type: string
   postgresql.shared_blks_dirtied:
     description: Total number of shared blocks dirtied by the statement, reported in delta value.
     type: int
@@ -246,6 +270,39 @@ attributes:
     type: int
   postgresql.state:
     description: Current overall state of this backend
+    type: string
+  postgresql.table.columns:
+    description: >-
+      The columns of the table in definition order, as a JSON array of objects with `name`,
+      `data_type`, `nullable` and `default` (null when the column has no default). Limited by
+      `schema_collection.max_columns`.
+    type: string
+  postgresql.table.foreign_keys:
+    description: The foreign key constraints of the table, as a JSON array of objects with `name` and `definition`.
+    type: string
+  postgresql.table.id:
+    description: The object identifier (OID) of the table.
+    type: string
+  postgresql.table.indexes:
+    description: >-
+      The indexes of the table, as a JSON array of objects with `name`, `definition` and the
+      `pg_index` flags `is_unique`, `is_exclusion`, `is_immediate`, `is_clustered`, `is_valid`,
+      `is_checkxmin`, `is_ready`, `is_live`, `is_replident` and `is_partial`.
+    type: string
+  postgresql.table.owner.name:
+    description: The name of the role that owns the table.
+    type: string
+  postgresql.table.partition_count:
+    description: The number of partitions (or inheritance children) of the table. 0 when it has none.
+    type: int
+  postgresql.table.partition_key:
+    description: The partition key definition of a partitioned table, or an empty string otherwise.
+    type: string
+  postgresql.table.relkind:
+    description: "The kind of table, as `pg_class.relkind`: `r` for an ordinary table, `p` for a partitioned table, `f` for a foreign table."
+    type: string
+  postgresql.table.toast_table:
+    description: The name of the TOAST table of the table, or an empty string if it has none.
     type: string
   postgresql.temp_blks_read:
     description: Total number of temp blocks read by the statement, reported in delta value.
@@ -343,6 +400,33 @@ events:
       - postgresql.blocking.lock.type
       - postgresql.blocking.lock.relation
       - postgresql.blocking.transaction.start_time
+  db.server.table_definition:
+    enabled: false
+    description: >-
+      The definition of a table read from the system catalog: its database, schema, columns,
+      indexes and foreign keys. One event is reported per table on each schema collection.
+    attributes:
+      - db.system.name
+      - db.namespace
+      - db.collection.name
+      - postgresql.database.name
+      - postgresql.database.id
+      - postgresql.database.owner.name
+      - postgresql.database.encoding
+      - postgresql.database.description
+      - postgresql.schema.name
+      - postgresql.schema.id
+      - postgresql.schema.owner.name
+      - postgresql.table.id
+      - postgresql.table.owner.name
+      - postgresql.table.relkind
+      - postgresql.table.toast_table
+      - postgresql.table.partition_key
+      - postgresql.table.partition_count
+      - postgresql.table.columns
+      - postgresql.table.indexes
+      - postgresql.table.foreign_keys
+
   db.server.top_query:
     enabled: false
     description: top query

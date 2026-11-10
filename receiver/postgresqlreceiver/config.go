@@ -37,6 +37,12 @@ const (
 // db.server.query_plan is collected as part of top query collection, so on its own it reports nothing.
 var errQueryPlanWithoutTopQuery = errors.New("`db.server.query_plan` requires `db.server.top_query` to be enabled")
 
+var (
+	errSchemaCollectionInterval   = errors.New("invalid config: 'schema_collection.collection_interval' must be positive")
+	errSchemaCollectionMaxTables  = errors.New("invalid config: 'schema_collection.max_tables' must be positive")
+	errSchemaCollectionMaxColumns = errors.New("invalid config: 'schema_collection.max_columns' must be positive")
+)
+
 type TopQueryCollection struct {
 	MaxRowsPerQuery        int64         `mapstructure:"max_rows_per_query"`
 	TopNQuery              int64         `mapstructure:"top_n_query"`
@@ -44,6 +50,18 @@ type TopQueryCollection struct {
 	QueryPlanCacheSize     int           `mapstructure:"query_plan_cache_size"`
 	QueryPlanCacheTTL      time.Duration `mapstructure:"query_plan_cache_ttl"`
 	CollectionInterval     time.Duration `mapstructure:"collection_interval"`
+	// prevent unkeyed literal initialization
+	_ struct{}
+}
+
+// SchemaCollection configures the db.server.table_definition event.
+type SchemaCollection struct {
+	// CollectionInterval is how often the table definitions are reported.
+	CollectionInterval time.Duration `mapstructure:"collection_interval"`
+	// MaxTables is the maximum number of tables reported per database.
+	MaxTables int64 `mapstructure:"max_tables"`
+	// MaxColumns is the maximum number of columns reported per table.
+	MaxColumns int64 `mapstructure:"max_columns"`
 	// prevent unkeyed literal initialization
 	_ struct{}
 }
@@ -71,6 +89,7 @@ type Config struct {
 	LogsBuilderConfig     metadata.LogsBuilderConfig    `mapstructure:",squash"`
 	QuerySampleCollection QuerySampleCollection         `mapstructure:"query_sample_collection,omitempty"`
 	TopQueryCollection    TopQueryCollection            `mapstructure:"top_query_collection,omitempty"`
+	SchemaCollection      SchemaCollection              `mapstructure:"schema_collection,omitempty"`
 	// DBAuth optionally sources the connection credential from a db_auth provider
 	// extension (e.g. AWS IAM) instead of a static password. When set, the provider
 	// supplies the password at connection-open time. Mutually exclusive with the
@@ -135,6 +154,18 @@ func (cfg *Config) Validate() error {
 
 	if cfg.LogsBuilderConfig.Events.DbServerQueryPlan.Enabled && !cfg.LogsBuilderConfig.Events.DbServerTopQuery.Enabled {
 		err = multierr.Append(err, errQueryPlanWithoutTopQuery)
+	}
+
+	if cfg.LogsBuilderConfig.Events.DbServerTableDefinition.Enabled {
+		if cfg.SchemaCollection.CollectionInterval <= 0 {
+			err = multierr.Append(err, errSchemaCollectionInterval)
+		}
+		if cfg.SchemaCollection.MaxTables <= 0 {
+			err = multierr.Append(err, errSchemaCollectionMaxTables)
+		}
+		if cfg.SchemaCollection.MaxColumns <= 0 {
+			err = multierr.Append(err, errSchemaCollectionMaxColumns)
+		}
 	}
 
 	return err

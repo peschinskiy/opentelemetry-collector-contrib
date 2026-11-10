@@ -366,7 +366,7 @@ func (p *postgreSQLScraper) isCollectionDue(collectionTime time.Time, interval t
 		return true
 	}
 
-	p.logger.Debug("Skipping the collection of top queries because collection interval has not yet elapsed." +
+	p.logger.Debug("Skipping the collection because collection interval has not yet elapsed." +
 		"last collection time: " + p.lastExecutionTimestamp.String() + ", current collection time: " + collectionTime.String() +
 		", collection interval: " + interval.String())
 	return false
@@ -639,6 +639,88 @@ func (p *postgreSQLScraper) collectTopQuery(ctx context.Context, clientFactory p
 		}
 		count++
 	}
+}
+
+// scrapeTableDefinitions reports db.server.table_definition events once per
+// schema_collection.collection_interval; scrapes in between report nothing.
+func (p *postgreSQLScraper) scrapeTableDefinitions(ctx context.Context) (plog.Logs, error) {
+	var errs errsMux
+	collectionTime := time.Now()
+
+	if p.isCollectionDue(collectionTime, p.config.SchemaCollection.CollectionInterval) {
+		p.collectTableDefinitions(ctx, collectionTime, &errs)
+		p.lastExecutionTimestamp = collectionTime
+	}
+
+	rb := p.setupLogsResourceBuilder(p.lb.NewResourceBuilder())
+	return p.lb.Emit(metadata.WithLogsResource(rb.Emit())), errs.combine()
+}
+
+func (p *postgreSQLScraper) collectTableDefinitions(ctx context.Context, collectionTime time.Time, errs *errsMux) {
+	timestamp := pcommon.NewTimestampFromTime(collectionTime)
+
+	connectClient, err := p.clientFactory.getClient(ctx, p.config.ConnectDatabase)
+	if err != nil {
+		p.logger.Error("Failed to initialize connection to configured connect_database", zap.String("connect_database", p.config.ConnectDatabase), zap.Error(err))
+		errs.add(err)
+		return
+	}
+	defer connectClient.Close()
+
+	p.ensureDBVersion(ctx, connectClient)
+
+	databases, err := connectClient.getDatabaseDefinitions(ctx, p.config.Databases, p.excludedDatabases)
+	if err != nil {
+		p.logger.Error("Failed to list databases for schema collection", zap.Error(err))
+		errs.add(err)
+		return
+	}
+
+	for _, database := range databases {
+		tables, err := p.getTableDefinitions(ctx, database.name)
+		if err != nil {
+			// One unreadable database doesn't stop the others from being reported.
+			p.logger.Error("Failed to collect table definitions", zap.String("database", database.name), zap.Error(err))
+			errs.addPartial(fmt.Errorf("database %q: %w", database.name, err))
+			continue
+		}
+		for i := range tables {
+			table := &tables[i]
+			p.lb.RecordDbServerTableDefinitionEvent(
+				context.Background(),
+				timestamp,
+				metadata.AttributeDbSystemNamePostgresql,
+				formatNamespace(database.name, table.schemaName),
+				table.name,
+				database.name,
+				database.id,
+				database.owner,
+				database.encoding,
+				database.description,
+				table.schemaName,
+				table.schemaID,
+				table.schemaOwner,
+				table.id,
+				table.owner,
+				table.relkind,
+				table.toastTable,
+				table.partitionKey,
+				table.partitionCount,
+				table.columns,
+				table.indexes,
+				table.foreignKeys,
+			)
+		}
+	}
+}
+
+func (p *postgreSQLScraper) getTableDefinitions(ctx context.Context, database string) ([]tableDefinition, error) {
+	dbClient, err := p.clientFactory.getClient(ctx, database)
+	if err != nil {
+		return nil, err
+	}
+	defer dbClient.Close()
+	return dbClient.getTableDefinitions(ctx, p.config.SchemaCollection.MaxTables, p.config.SchemaCollection.MaxColumns)
 }
 
 // start resolves the credential provider (if a db_auth block is configured)

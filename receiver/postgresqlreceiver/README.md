@@ -130,7 +130,7 @@ The following settings are also optional and nested under `tls` to help configur
 - `initial_delay` (default = `1s`): defines how long this receiver waits before starting.
 - `timeout` (default = `60s`): The context deadline for each metrics or logs collection cycle, shared across its queries and databases. It is independent of `collection_interval` and is not a separate timeout for each query. Increase it if legitimate scrapes need more time. Setting `timeout: 0` disables the deadline and allows blocked queries to stall collection and shutdown indefinitely.
 
-The timeout also applies to enabled query sample and top query log collectors; collectors in the same logs controller share the deadline. During shutdown, the receiver waits for an active scrape to finish, which can take the remaining timeout plus cancellation and cleanup time. The timeout does not make shutdown immediate or impose a strict process-exit deadline. Existing partial telemetry and error handling also apply to timed-out scrapes.
+The timeout also applies to enabled query sample, top query and [schema](#schema-collection) log collectors; collectors in the same logs controller share the deadline. During shutdown, the receiver waits for an active scrape to finish, which can take the remaining timeout plus cancellation and cleanup time. The timeout does not make shutdown immediate or impose a strict process-exit deadline. Existing partial telemetry and error handling also apply to timed-out scrapes.
 
 ### Query Sample Collection
 We provide functionality to collect the query sample from PostgreSQL. It will get historical query 
@@ -253,6 +253,54 @@ receivers:
         enabled: true
 ```
 
+### Schema Collection
+The receiver can report the definition of every table it can see, read from the system catalog:
+its database, schema, columns, indexes and foreign keys. One `db.server.table_definition` event is
+reported per table. To enable it, you will need the following configuration
+```
+...
+    events:
+      db.server.table_definition:
+        enabled: true
+...
+```
+
+The receiver connects to each scanned database (`databases`, or every database that accepts
+connections, minus `exclude_databases`) to read its catalog. The catalog is readable by any role, so
+this needs no grants on the tables themselves. Tables in `pg_catalog`, `information_schema` and the
+TOAST and temporary schemas are skipped, and the partitions of a partitioned table are reported
+through their parent (`postgresql.table.partition_key` and `postgresql.table.partition_count`).
+
+The columns, indexes and foreign keys are reported as JSON arrays in the string attributes
+`postgresql.table.columns`, `postgresql.table.indexes` and `postgresql.table.foreign_keys`, like
+`postgresql.query_plan`. Use the OTTL `ParseJSON` function to work with them in the Collector.
+Each event can therefore be large: keep this in mind when a batcher or an exporter limits record
+size.
+
+The following options are available under `schema_collection`:
+- `collection_interval`: (optional, default=10m) How often the table definitions are reported. Scrapes in between report nothing. This value must be a string readable by Golang's [time.ParseDuration](https://pkg.go.dev/time#ParseDuration).
+- `max_tables`: (optional, default=300) The maximum number of tables reported per database, ordered by schema and table name.
+- `max_columns`: (optional, default=50) The maximum number of columns reported per table, in definition order.
+
+#### Scrape timeout
+
+The catalog queries run within the receiver's scrape [`timeout`](#configuration) (default `60s`),
+not a timeout of their own. That one deadline covers every database of a collection, read one after
+another, and is shared with the other enabled log collectors. A database that isn't read before the
+deadline is reported as failed and is read again on the next collection. On a server with many databases, raise `timeout`:
+
+```yaml
+receivers:
+  postgresql:
+    timeout: 5m
+```
+
+The query also waits for any table it reads that another session holds an `ACCESS EXCLUSIVE` lock
+on (for example during `ALTER TABLE`), since `pg_get_indexdef` and `pg_get_expr` need a lock on the
+table. While it waits, it keeps the locks it already took on the tables read before it, which can
+hold up DDL on those tables. Keep this in mind before raising `timeout` well beyond what the
+collection needs.
+
 ### Vector Metrics
 
 The receiver can report [pgvector](https://github.com/pgvector/pgvector) similarity-search and insert activity
@@ -333,12 +381,17 @@ receivers:
         enabled: true
       db.server.top_query:
         enabled: true
+      db.server.table_definition:
+        enabled: true
     query_sample_collection:
       max_rows_per_query: 100
     top_query_collection:
       max_rows_per_query: 100
       top_n_query: 100
       collection_interval: 60s
+    schema_collection:
+      collection_interval: 10m
+      max_tables: 300
 ```
 
 The full list of settings exposed for this receiver are documented in [config.go](./config.go) with detailed sample configurations in [testdata/config.yaml](./testdata/config.yaml). TLS config is documented further under the [opentelemetry collector's configtls package](https://github.com/open-telemetry/opentelemetry-collector/blob/main/config/configtls/README.md).

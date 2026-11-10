@@ -4,6 +4,7 @@
 package postgresqlreceiver
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -895,4 +896,51 @@ func TestGetIndexStatsRowsErr(t *testing.T) {
 	require.ErrorIs(t, err, iterErr)
 	assert.Len(t, stats, 1)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+var tableDefinitionColumns = []string{
+	"schema_oid", "schema_name", "schema_owner",
+	"table_oid", "table_name", "table_owner", "relkind",
+	"toast_table", "partition_key", "partition_count",
+	"columns", "indexes", "foreign_keys",
+}
+
+func TestGetTableDefinitionsInvalidJSON(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.ExpectQuery(`FROM pg_class c`).
+		WillReturnRows(sqlmock.NewRows(tableDefinitionColumns).
+			AddRow("2200", "public", "o", "16385", "accounts", "o", "r", "", "", int64(0), []byte(`{`), []byte(`[]`), []byte(`[]`)))
+
+	c := &postgreSQLClient{client: db}
+	_, err = c.getTableDefinitions(t.Context(), 10, 10)
+	require.ErrorContains(t, err, "failed to decode columns of table public.accounts")
+}
+
+func TestTableDefinitionTemplateRequiresLimits(t *testing.T) {
+	err := tableDefinitionTmpl.Execute(&bytes.Buffer{}, map[string]any{"maxTables": int64(1)})
+	assert.Error(t, err)
+}
+
+func TestGetTableDefinitionsCompactsJSON(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	// json_build_object output, spacing included, as PostgreSQL returns it.
+	mock.ExpectQuery(`FROM pg_class c`).
+		WillReturnRows(sqlmock.NewRows(tableDefinitionColumns).
+			AddRow("2200", "public", "o", "16385", "accounts", "o", "r", "", "", int64(0),
+				[]byte(`[{"name" : "id", "data_type" : "integer", "nullable" : false, "default" : null}]`),
+				[]byte(`[]`), []byte(`[]`)))
+
+	c := &postgreSQLClient{client: db}
+	tables, err := c.getTableDefinitions(t.Context(), 10, 10)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	// Key order is kept, so the value is stable across collections.
+	assert.Equal(t, `[{"name":"id","data_type":"integer","nullable":false,"default":null}]`, tables[0].columns)
+	assert.Equal(t, "[]", tables[0].indexes)
 }

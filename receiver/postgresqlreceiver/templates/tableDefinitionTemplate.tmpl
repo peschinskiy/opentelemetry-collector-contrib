@@ -1,0 +1,64 @@
+/* otel-collector-ignore */ SELECT
+  n.oid::TEXT AS schema_oid,
+  n.nspname AS schema_name,
+  n.nspowner::regrole::TEXT AS schema_owner,
+  c.oid::TEXT AS table_oid,
+  c.relname AS table_name,
+  c.relowner::regrole::TEXT AS table_owner,
+  c.relkind::TEXT AS relkind,
+  COALESCE(t.relname, '') AS toast_table,
+  COALESCE(pg_get_partkeydef(c.oid), '') AS partition_key,
+  (SELECT count(*) FROM pg_inherits i WHERE i.inhparent = c.oid) AS partition_count,
+  COALESCE((
+    SELECT json_agg(json_build_object(
+      'name', a.attname,
+      'data_type', format_type(a.atttypid, a.atttypmod),
+      'nullable', NOT a.attnotnull,
+      'default', pg_get_expr(ad.adbin, ad.adrelid)
+    ) ORDER BY a.attnum)
+    FROM (
+      SELECT attrelid, attnum, attname, atttypid, atttypmod, attnotnull
+      FROM pg_attribute
+      WHERE attrelid = c.oid AND attnum > 0 AND NOT attisdropped
+      ORDER BY attnum
+      LIMIT {{ .maxColumns }}
+    ) a
+    LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+  ), '[]') AS columns,
+  COALESCE((
+    SELECT json_agg(json_build_object(
+      'name', ic.relname,
+      'definition', pg_get_indexdef(ix.indexrelid),
+      'is_unique', ix.indisunique,
+      'is_exclusion', ix.indisexclusion,
+      'is_immediate', ix.indimmediate,
+      'is_clustered', ix.indisclustered,
+      'is_valid', ix.indisvalid,
+      'is_checkxmin', ix.indcheckxmin,
+      'is_ready', ix.indisready,
+      'is_live', ix.indislive,
+      'is_replident', ix.indisreplident,
+      'is_partial', ix.indpred IS NOT NULL
+    ) ORDER BY ic.relname)
+    FROM pg_index ix
+    JOIN pg_class ic ON ic.oid = ix.indexrelid
+    WHERE ix.indrelid = c.oid
+  ), '[]') AS indexes,
+  COALESCE((
+    SELECT json_agg(json_build_object(
+      'name', con.conname,
+      'definition', pg_get_constraintdef(con.oid)
+    ) ORDER BY con.conname)
+    FROM pg_constraint con
+    WHERE con.conrelid = c.oid AND con.contype = 'f'
+  ), '[]') AS foreign_keys
+FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  LEFT JOIN pg_class t ON t.oid = c.reltoastrelid
+WHERE c.relkind IN ('r', 'p', 'f')
+  AND NOT c.relispartition
+  AND n.nspname NOT IN ('information_schema', 'pg_catalog')
+  AND n.nspname NOT LIKE 'pg\_toast%'
+  AND n.nspname NOT LIKE 'pg\_temp\_%'
+ORDER BY n.nspname, c.relname
+LIMIT {{ .maxTables }};
